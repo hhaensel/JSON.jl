@@ -57,7 +57,9 @@ const IsPrintedAsString = Union{
     Dates.TimeType, Char, Type, AbstractString, Enum, Symbol}
 lower(x::IsPrintedAsString) = x
 
-lower(m::Module) = throw(ArgumentError("cannot serialize Module $m as JSON"))
+abstract type DummyModule end
+# chose a Union type to make it possible to extend lower for Modules
+lower(m::Union{Module,DummyModule}) = throw(ArgumentError("cannot serialize Module $m as JSON"))
 lower(x::Real) = convert(Float64, x)
 lower(x::Base.AbstractSet) = collect(x)
 
