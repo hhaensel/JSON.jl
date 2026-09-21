@@ -47,6 +47,9 @@ struct FloatRationalStyle <: JSON.JSONStyle end
 JSON.lower(::FloatRationalStyle, x::Rational) = float(x)
 JSON.applyany(::ClosedStyle, f, k, v) = throw(ArgumentError("closed"))
 
+quiet(f) = Logging.with_logger(f, NullLogger())
+quiet_expand_eval(ex) = quiet(() -> eval(macroexpand(@__MODULE__, ex)))
+
 @testset "JSON.json" begin
 
 @testset "Basics" begin
@@ -331,6 +334,90 @@ JSON.applyany(::ClosedStyle, f, k, v) = throw(ArgumentError("closed"))
     io = IOBuffer()
     @test_throws ArgumentError JSON.json(io, Float64(π); float_style=:fixed, float_precision=0)
     @test_throws ArgumentError JSON.json(Float64(π); float_style=:not_a_style)
+end
+
+@testset "@js_str" begin
+    @testset "no flags: literal construction" begin
+        @test JSON.js"""alert("Hello World")""" == JSONText("alert(\"Hello World\")")
+        @test JSON.js"" == JSONText("")
+        @test JSON.js"{\"a\": 1}" == JSONText("{\"a\": 1}")
+        @test JSON.js"abc" isa JSONText
+    end
+
+    @testset "no flags: no interpolation happens" begin
+        x = 42
+        @test JSON.js"value = $x" == JSONText("value = \$x")
+        @test JSON.js"1 + 2 == $(1 + 2)" == JSONText("1 + 2 == \$(1 + 2)")
+        # escape sequences stay raw (backslash + n, two characters)
+        @test JSON.js"a\nb" == JSONText("a\\nb")
+    end
+
+    @testset "i flag: interpolation" begin
+        @test JSON.js"""alert("1 + 2 == $(1 + 2)")"""i == JSONText("alert(\"1 + 2 == 3\")")
+
+        name = "World"
+        @test JSON.js"""alert("Hello $name")"""i == JSONText("alert(\"Hello World\")")
+
+        n = 3
+        arr = [1, 2, 3]
+        @test JSON.js"n = $n"i == JSONText("n = 3")
+        @test JSON.js"arr = $arr"i == JSONText("arr = [1, 2, 3]")
+        @test JSON.js"nothing = $(nothing)"i == JSONText("nothing = nothing")
+
+        # escape sequences are processed with the i flag
+        @test JSON.js"a\nb"i == JSONText("a\nb")
+        @test JSON.js""i == JSONText("")
+    end
+
+    @testset "i flag: interpolation is evaluated in caller scope" begin
+        let secret = "s3cr3t"
+            @test JSON.js"token=$secret"i == JSONText("token=s3cr3t")
+        end
+
+        @test JSON.js"""$(uppercase("ab"))"""i == JSONText("AB")
+        @test JSON.js"$(1//2)"i == JSONText("1//2")
+    end
+
+    @testset "flag handling: warning is emitted at expansion time" begin
+        @test_logs (:warn, r"Only 'i' flag currently supported") begin
+            @macroexpand JSON.js"raw $notinterpolated"x
+        end
+
+        @test_logs (:warn, r"Only 'i' flag currently supported") begin
+            @macroexpand JSON.js"y=$y"xi
+        end
+
+        # the supported flag must not warn
+        @test_logs min_level = Logging.Warn begin
+            @macroexpand JSON.js"z=$z"i
+        end
+    end
+
+    @testset "flag handling: fallback and interpolation behavior" begin
+        # Values are asserted separately, with the warning silenced. `eval` runs
+        # in module scope, so interpolated variables must be globals.
+        @test quiet_expand_eval(raw"""JSON.js"raw $notinterpolated"x""" |> Meta.parse) ==
+              JSONText("raw \$notinterpolated")
+
+        global y = 7
+        @test quiet_expand_eval(raw"""JSON.js"y=$y"xi""" |> Meta.parse) == JSONText("y=7")
+    end
+
+    @testset "macro expansion" begin
+        ex = @macroexpand JSON.js"abc"
+        @test ex.head === :call
+        @test ex.args[2] == "abc"
+
+        ex_i = @macroexpand JSON.js"abc"i
+        @test ex_i.head === :call
+    end
+
+    @testset "error propagation with i flag" begin
+        # invalid interpolation fails at expansion time
+        @test_throws Exception @macroexpand JSON.js"$()"i
+        # undefined variable surfaces at runtime
+        @test_throws UndefVarError eval(@macroexpand JSON.js"$undefined_variable_xyz"i)
+    end
 end
 
 @testset "Enhanced @omit_null and @omit_empty macros" begin
