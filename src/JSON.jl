@@ -135,7 +135,54 @@ end
 macro js_str(s, flags)
     flags == "i" || @warn "Only 'i' flag currently supported (string interpolation)."
     if 'i' in flags
-        :( JSONText($(esc(Meta.parse("\"\"\"$s\"\"\"")))) )
+        parts = Any[]
+        io = IOBuffer()
+        
+        i = 1
+        len = lastindex(s)
+        backslash_odd = false
+        
+        while i ≤ len
+            c = s[i]
+            
+            if c == '\\'
+                # only write one of consecutive backslashes
+                backslash_odd || write(io, c)
+                backslash_odd = ! backslash_odd
+                i = nextind(s, i)
+            elseif c == '$' && ! backslash_odd
+                # parse content after non-escaped '$'
+
+                # push io content to parts
+                io.size > 0 && push!(parts, String(take!(io)))
+                
+                expr, i = Meta.parse(s, nextind(s, i), greedy=false)
+
+                if expr === nothing || expr == :()
+                    throw(Meta.ParseError("syntax: empty interpolation in string"))
+                end
+
+                # push parsed content to parts
+                push!(parts, esc(expr))
+            else
+                # if if a backslash precedes a special character, overwrite the backslash
+                if backslash_odd && c in raw"$nt"
+                    seek(io, position(io) - 1)
+                    if c == 'n'
+                        c = '\n'
+                    elseif c == 't'
+                        c = '\t'
+                    end
+                end
+                write(io, c)
+                backslash_odd = false
+                i = nextind(s, i)
+            end
+        end
+        
+        io.size > 0 && push!(parts, String(take!(io)))
+
+        :( JSONText(string($(parts...))) )
     else
         :( JSONText($(esc(s))) )
     end

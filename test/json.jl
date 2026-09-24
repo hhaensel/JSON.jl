@@ -367,6 +367,11 @@ end
         # escape sequences are processed with the i flag
         @test JSON.js"a\nb"i == JSONText("a\nb")
         @test JSON.js""i == JSONText("")
+
+        # trailing double quotes are correctly escaped
+        @test JSON.js"\"$(1 + 2)\""i == JSONText("\"3\"")
+        @test JSON.js"\""i == JSONText("\"")
+        @test JSON.js"π\""i == JSONText("π\"")
     end
 
     @testset "i flag: interpolation is evaluated in caller scope" begin
@@ -378,6 +383,48 @@ end
         @test JSON.js"$(1//2)"i == JSONText("1//2")
     end
 
+    @testset "Escaping dollar signs (\$)" begin
+        value = 100
+        
+        # An escaped dollar sign must NOT be evaluated as a variable.
+        # It must remain as \$ in the raw JSON text output.
+        @test JSON.js"\"Price: \$value\""i == JSONText("\"Price: \$value\"")
+        @test JSON.js"\"Price: \$(1+2)\""i == JSONText("\"Price: \$(1+2)\"")
+    end
+
+    @testset "Backslash cascades and parity" begin
+        x = "Test"
+        
+        # Two backslashes escape each other -> $x is still interpolated
+        @test JSON.js"\"\\\\$x\""i == JSONText("\"\\\\Test\"")
+        
+        # Three backslashes -> Two escape each other, the third escapes the $
+        @test JSON.js"\"\\\\\\$x\""i == JSONText("\"\\\\\\$x\"")
+        
+        # Windows path stability before characters like n or t
+        @test JSON.js"\"C:\\\\Users\\\\default\\\\notes.txt\""i == JSONText("\"C:\\\\Users\\\\default\\\\notes.txt\"")
+    end
+
+    @testset "Control characters handling (\\n, \\t)" begin
+        # Literal escapes entered in the editor (\n and \t)
+        @test JSON.js"\"Line 1\nLine 2\""i == JSONText("\"Line 1\nLine 2\"")
+        @test JSON.js"\"Column 1\tColumn 2\""i == JSONText("\"Column 1\tColumn 2\"")
+    end
+
+    @testset "Unicode and Emojis" begin
+        greeting_emoji = "🚀"
+        money_emoji = "💰"
+        
+        # Emoji variable interpolation
+        @test JSON.js"\"Start: $greeting_emoji\""i == JSONText("\"Start: 🚀\"")
+        
+        # Unicode safe indexing next to control characters (safely isolated via explicit syntax)
+        @test JSON.js"\"🔥$(greeting_emoji)✨\""i == JSONText("\"🔥🚀✨\"")
+        
+        # Encapsulated Unicode characters linked with variables
+        @test JSON.js"\"Target \$100 $(money_emoji)\""i == JSONText("\"Target \$100 💰\"")
+    end
+    
     @testset "flag handling: warning is emitted at expansion time" begin
         @test_logs (:warn, r"Only 'i' flag currently supported") begin
             @macroexpand JSON.js"raw $notinterpolated"x
